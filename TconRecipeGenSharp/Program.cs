@@ -1,18 +1,72 @@
 ﻿// See https://aka.ms/new-console-template for more information
 
-List<string> errors = [];
+using System.Collections.Immutable;
+using System.Text;
 
-if (args is not [var path]) errors.Add("Please drag and drop a input file to this program.");
+using KirisameLib.Extensions;
 
-if (errors.Count > 0)
+using TconRecipeGenSharp;
+
+using Tomlyn;
+using Tomlyn.Syntax;
+
+
+#region Check & Parse
+
+if (args.Length == 0)
 {
-    Console.WriteLine("Errors:");
-    foreach (var error in errors)
-    {
-        Console.WriteLine(error);
-    }
+    Console.WriteLine("Please drag and drop input files to this program.");
+    Console.ReadKey();
     return 0;
 }
 
-Console.WriteLine("Hello, World!");
+var models = args.SelectExist(path =>
+{
+    if (!File.Exists(path))
+    {
+        Console.WriteLine($"Input file {path} does not exist.");
+        return null;
+    }
+    var syntax = Toml.Parse(File.ReadAllBytes(path));
+    if (syntax.HasErrors)
+    {
+        Console.WriteLine($"Failed to parse input file {path}. Errors:");
+        syntax.Diagnostics.ForEach(Console.WriteLine);
+        return null;
+    }
+
+    var succeed = syntax.TryToModel<Dictionary<string, InputModel>>(out var dict, out DiagnosticsBag diagnostics);
+    Console.WriteLine($"Parsing input file {path} {(succeed ? "succeeded." : "failed.")}");
+    if (diagnostics.Count > 0) Console.WriteLine("Diagnostics:");
+    diagnostics.ForEach(Console.WriteLine);
+    return dict?.Where(p => p.Value.Check());
+}).Flatten().ToImmutableArray();
+
+if (!models.Any())
+{
+    Console.WriteLine("No valid input.");
+    Console.ReadKey();
+    return 0;
+}
+
+Console.WriteLine();
+
+#endregion
+
+var outputPath = @$"{Directory.GetCurrentDirectory()}\recipes";
+Console.WriteLine(outputPath);
+if (!Directory.Exists(outputPath)) Directory.CreateDirectory(outputPath);
+
+var outputs = models.SelectMany(model => model.Value.GenerateOutput(model.Key));
+foreach (var (path, data) in outputs)
+{
+    var filePath = Path.Combine(outputPath, path);
+    Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+    using var outFile = File.OpenWrite(filePath);
+    outFile.Write(Encoding.UTF8.GetBytes(data));
+    outFile.Flush();
+}
+
+Console.WriteLine($"Work done, generation files path: {outputPath}.");
+Console.ReadKey();
 return 0;
